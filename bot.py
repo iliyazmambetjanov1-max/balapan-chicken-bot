@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
@@ -21,17 +22,39 @@ bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
+# Временное хранилище заказов (в памяти)
+pending_orders = {}
+
 
 # ===== КОМАНДА /START =====
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message, state: FSMContext):
-    await message.answer(
-        "🐔 *Добро пожаловать в Balapan chicken!* 🐔\n\n"
-        "Вы сделали заказ на нашем сайте.\n"
-        "Пожалуйста, укажите ваши данные для доставки.\n\n"
-        "✏️ *Введите ваше имя:*",
-        parse_mode="Markdown"
-    )
+    # Проверяем, есть ли параметр с заказом
+    args = message.text.split()
+    order_data = None
+    
+    if len(args) > 1 and args[1].startswith("order_"):
+        order_id = args[1].replace("order_", "")
+        # Сохраняем ID заказа в сессию
+        await state.update_data(order_id=order_id)
+        
+        await message.answer(
+            "🐔 *Добро пожаловать в Balapan chicken!* 🐔\n\n"
+            "✅ *Мы получили ваш заказ с сайта!*\n\n"
+            "Пожалуйста, укажите ваши данные для доставки.\n\n"
+            "✏️ *Введите ваше имя:*",
+            parse_mode="Markdown"
+        )
+    else:
+        await message.answer(
+            "🐔 *Добро пожаловать в Balapan chicken!* 🐔\n\n"
+            "Вы можете оформить заказ на нашем сайте.\n"
+            "Чтобы начать оформление, нажмите кнопку 'Оформить заказ' на сайте.\n\n"
+            "📞 По вопросам: +996 XXX XXX XXX",
+            parse_mode="Markdown"
+        )
+        return
+    
     await OrderState.waiting_for_name.set()
 
 
@@ -87,11 +110,13 @@ async def process_address(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
     name = user_data.get("name")
     phone = user_data.get("phone")
+    order_id = user_data.get("order_id", "не указан")
     
     # Формируем заказ для администратора
     order_text = f"""
 🆕 *НОВЫЙ ЗАКАЗ!* 🆕
 ──────────────────
+🆔 *ID заказа:* {order_id}
 👤 *Имя:* {name}
 📞 *Телефон:* {phone}
 🏠 *Адрес:* {address}
@@ -129,7 +154,7 @@ async def cmd_cancel(message: types.Message, state: FSMContext):
     await state.finish()
     await message.answer(
         "❌ Оформление заказа отменено.\n\n"
-        "Вы можете начать заново командой /start"
+        "Вы можете начать заново через сайт, нажав 'Оформить заказ'"
     )
 
 
@@ -138,9 +163,10 @@ async def cmd_cancel(message: types.Message, state: FSMContext):
 async def cmd_help(message: types.Message):
     await message.answer(
         "🐔 *Balapan chicken - Помощь* 🐔\n\n"
-        "/start - Начать оформление заказа\n"
-        "/cancel - Отменить оформление заказа\n"
-        "/help - Показать это сообщение\n\n"
+        "1️⃣ Оформите заказ на нашем сайте\n"
+        "2️⃣ Перейдите в бота для подтверждения\n"
+        "3️⃣ Укажите имя, телефон и адрес\n"
+        "4️⃣ Дождитесь звонка оператора\n\n"
         "📞 По вопросам: +996 XXX XXX XXX",
         parse_mode="Markdown"
     )
