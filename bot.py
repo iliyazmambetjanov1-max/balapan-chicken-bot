@@ -48,19 +48,17 @@ def clear_pending_order(user_id):
         del pending_orders[user_id]
 
 
-# ===== ИСПРАВЛЕННАЯ ФУНКЦИЯ ПАРСИНГА =====
+# ===== ФУНКЦИЯ ДЛЯ ПАРСИНГА (ПРАВИЛЬНАЯ ВЕРСИЯ) =====
 def parse_start_data(text):
     """Извлекает данные из ссылки /start order_ID_JSON"""
     try:
         print(f"🔍 Парсинг: {text[:200]}")
         
         if not text or not text.startswith('/start'):
-            print("❌ Не команда /start")
             return None, None
         
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
-            print("❌ Нет параметров")
             return None, None
         
         param = parts[1].strip()
@@ -69,40 +67,24 @@ def parse_start_data(text):
         # Ищем order_ЦИФРЫ_ЛЮБЫЕ_СИМВОЛЫ
         match = re.search(r'order_(\d+)_(.+)', param)
         if not match:
-            print("❌ Нет совпадения с order_..._...")
+            print("❌ Нет совпадения")
             return None, None
         
         order_id = match.group(1)
         encoded_json = match.group(2)
-        print(f"🆔 ID: {order_id}")
-        print(f"📦 Закодированный JSON: {encoded_json[:100]}")
         
-        try:
-            decoded_json = unquote(encoded_json)
-            print(f"📋 Декодированный JSON: {decoded_json[:150]}")
-        except Exception as e:
-            print(f"❌ Ошибка декодирования URL: {e}")
-            return None, None
+        # Декодируем URL
+        decoded_json = unquote(encoded_json)
+        print(f"📋 Декодировано: {decoded_json[:150]}")
         
-        try:
-            order_data = json.loads(decoded_json)
-            print(f"✅ JSON распарсен успешно!")
-            return order_id, order_data
-        except json.JSONDecodeError as e:
-            print(f"❌ Ошибка парсинга JSON: {e}")
-            try:
-                decoded_json2 = unquote(decoded_json)
-                order_data = json.loads(decoded_json2)
-                print("✅ Успех после повторного декодирования!")
-                return order_id, order_data
-            except Exception as e2:
-                print(f"❌ Повторная попытка не удалась: {e2}")
-                return None, None
+        # Парсим JSON
+        order_data = json.loads(decoded_json)
+        print(f"✅ Успешно! ID: {order_id}")
+        
+        return order_id, order_data
         
     except Exception as e:
-        print(f"❌ Общая ошибка: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"❌ Ошибка: {e}")
         return None, None
 
 
@@ -114,22 +96,16 @@ async def cmd_start(message: types.Message, state: FSMContext):
     
     print(f"📨 /start от {user_id}: {text[:100]}")
     
+    # Пытаемся распарсить параметр
     order_id, order_data = parse_start_data(text)
     
     if order_data:
         print(f"✅ Заказ получен! ID: {order_id}")
-        save_pending_order(user_id, order_id, order_data)
+        await state.update_data(order_data=order_data)
         await show_order(message, state, order_data)
         return
     
-    pending = get_pending_order(user_id)
-    if pending:
-        print(f"✅ Найден сохранённый заказ для {user_id}")
-        order_data = pending['order_data']
-        clear_pending_order(user_id)
-        await show_order(message, state, order_data)
-        return
-    
+    # Если заказа нет — обычное приветствие
     print("❌ Заказ не найден")
     await message.answer(
         "🐔 *Добро пожаловать в Balapan chicken!* 🐔\n\n"
@@ -173,7 +149,7 @@ async def process_name(message: types.Message, state: FSMContext):
         return
     await state.update_data(name=name)
     await message.answer(
-        f"✅ {name}, спасибо!\n\n📞 Теперь укажите ваш *номер телефона*:\nНапример: +996 700 123 456",
+        f"✅ {name}, спасибо!\n\n📞 Теперь укажите ваш номер телефона:",
         parse_mode="Markdown"
     )
     await OrderState.waiting_for_phone.set()
@@ -187,7 +163,7 @@ async def process_phone(message: types.Message, state: FSMContext):
         return
     await state.update_data(phone=phone)
     await message.answer(
-        f"📞 Номер: {phone}\n\n🏠 Теперь укажите *адрес доставки*:\nУлица, дом, квартира, подъезд, этаж",
+        f"📞 Номер: {phone}\n\n🏠 Теперь укажите адрес доставки:",
         parse_mode="Markdown"
     )
     await OrderState.waiting_for_address.set()
@@ -201,7 +177,7 @@ async def process_address(message: types.Message, state: FSMContext):
         return
     await state.update_data(address=address)
     await message.answer(
-        "💰 *Выберите способ оплаты:*\n\n1️⃣ Наличными при получении\n2️⃣ Картой при получении\n3️⃣ Онлайн-перевод\n\n📝 Введите 1, 2 или 3:",
+        "💰 *Выберите способ оплаты:*\n\n1️⃣ Наличными\n2️⃣ Картой\n3️⃣ Онлайн-перевод\n\nВведите 1, 2 или 3:",
         parse_mode="Markdown"
     )
     await OrderState.waiting_for_payment.set()
@@ -247,19 +223,16 @@ async def process_payment(message: types.Message, state: FSMContext):
 💳 *Оплата:* {payment_method}
 ──────────────────
 ⏱️ *Время:* {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}
-──────────────────
-💬 Свяжитесь с клиентом для подтверждения.
     """
     
     await bot.send_message(ADMIN_CHAT_ID, order_text, parse_mode="Markdown")
     
     await message.answer(
-        "✅ *ЗАКАЗ ПРИНЯТ!* ✅\n\n"
+        "✅ *ЗАКАЗ ПРИНЯТ!*\n\n"
         f"👤 {name}, мы получили ваш заказ.\n"
         f"📞 Свяжемся с вами по номеру: {phone}\n"
         f"🏠 Доставим по адресу: {address}\n\n"
-        "🍗 *Спасибо, что выбрали Balapan chicken!*\n"
-        "⏱️ Ожидайте звонка в ближайшее время.",
+        "🍗 *Спасибо за заказ!*",
         parse_mode="Markdown"
     )
     
@@ -276,13 +249,14 @@ async def cmd_cancel(message: types.Message, state: FSMContext):
 async def cmd_help(message: types.Message):
     await message.answer(
         "🐔 *Balapan chicken - Помощь* 🐔\n\n"
-        "/start - Начать оформление\n"
+        "/start - Начать\n"
         "/cancel - Отменить\n"
         "/help - Помощь",
         parse_mode="Markdown"
     )
 
 
+# ===== FLASK-СЕРВЕР ДЛЯ RENDER =====
 app = Flask(__name__)
 
 @app.route('/')
