@@ -28,11 +28,9 @@ bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
-# Временное хранилище для заказов (в реальном проекте используйте базу данных)
 pending_orders = {}
 
 
-# ===== ФУНКЦИЯ ДЛЯ СОХРАНЕНИЯ ЗАКАЗА =====
 def save_pending_order(user_id, order_id, order_data):
     pending_orders[user_id] = {
         'order_id': order_id,
@@ -41,51 +39,70 @@ def save_pending_order(user_id, order_id, order_data):
     }
 
 
-# ===== ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ЗАКАЗА =====
 def get_pending_order(user_id):
     return pending_orders.get(user_id)
 
 
-# ===== ФУНКЦИЯ ДЛЯ УДАЛЕНИЯ ЗАКАЗА =====
 def clear_pending_order(user_id):
     if user_id in pending_orders:
         del pending_orders[user_id]
 
 
-# ===== ФУНКЦИЯ ДЛЯ ПАРСИНГА ДАННЫХ ИЗ ССЫЛКИ =====
+# ===== ИСПРАВЛЕННАЯ ФУНКЦИЯ ПАРСИНГА =====
 def parse_start_data(text):
-    """Извлекает данные из ссылки /start something"""
+    """Извлекает данные из ссылки /start order_ID_JSON"""
     try:
+        print(f"🔍 Парсинг: {text[:200]}")
+        
         if not text or not text.startswith('/start'):
+            print("❌ Не команда /start")
             return None, None
         
-        # Берём всё после /start
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
+            print("❌ Нет параметров")
             return None, None
         
         param = parts[1].strip()
+        print(f"📦 Параметр: {param[:200]}")
         
-        # Проверяем формат order_ID_JSON
+        # Ищем order_ЦИФРЫ_ЛЮБЫЕ_СИМВОЛЫ
         match = re.search(r'order_(\d+)_(.+)', param)
-        if match:
-            order_id = match.group(1)
-            json_part = match.group(2)
-            # Декодируем URL
-            json_part = unquote(json_part)
-            order_data = json.loads(json_part)
+        if not match:
+            print("❌ Нет совпадения с order_..._...")
+            return None, None
+        
+        order_id = match.group(1)
+        encoded_json = match.group(2)
+        print(f"🆔 ID: {order_id}")
+        print(f"📦 Закодированный JSON: {encoded_json[:100]}")
+        
+        try:
+            decoded_json = unquote(encoded_json)
+            print(f"📋 Декодированный JSON: {decoded_json[:150]}")
+        except Exception as e:
+            print(f"❌ Ошибка декодирования URL: {e}")
+            return None, None
+        
+        try:
+            order_data = json.loads(decoded_json)
+            print(f"✅ JSON распарсен успешно!")
             return order_id, order_data
-        
-        # Если это просто ID (без JSON)
-        match = re.search(r'order_(\d+)', param)
-        if match:
-            order_id = match.group(1)
-            return order_id, None
-        
-        return None, None
+        except json.JSONDecodeError as e:
+            print(f"❌ Ошибка парсинга JSON: {e}")
+            try:
+                decoded_json2 = unquote(decoded_json)
+                order_data = json.loads(decoded_json2)
+                print("✅ Успех после повторного декодирования!")
+                return order_id, order_data
+            except Exception as e2:
+                print(f"❌ Повторная попытка не удалась: {e2}")
+                return None, None
         
     except Exception as e:
-        print(f"Ошибка парсинга: {e}")
+        print(f"❌ Общая ошибка: {e}")
+        import traceback
+        traceback.print_exc()
         return None, None
 
 
@@ -97,19 +114,15 @@ async def cmd_start(message: types.Message, state: FSMContext):
     
     print(f"📨 /start от {user_id}: {text[:100]}")
     
-    # Пытаемся распарсить параметр из текущей команды
     order_id, order_data = parse_start_data(text)
     
     if order_data:
-        # Если в текущей команде есть полный заказ
-        print(f"✅ Заказ получен из команды! ID: {order_id}")
+        print(f"✅ Заказ получен! ID: {order_id}")
         save_pending_order(user_id, order_id, order_data)
         await show_order(message, state, order_data)
         return
     
-    # Проверяем, есть ли сохранённый заказ для этого пользователя
     pending = get_pending_order(user_id)
-    
     if pending:
         print(f"✅ Найден сохранённый заказ для {user_id}")
         order_data = pending['order_data']
@@ -117,7 +130,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
         await show_order(message, state, order_data)
         return
     
-    # Если заказа нет — показываем обычное приветствие
     print("❌ Заказ не найден")
     await message.answer(
         "🐔 *Добро пожаловать в Balapan chicken!* 🐔\n\n"
@@ -128,7 +140,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
     )
 
 
-# ===== ФУНКЦИЯ ДЛЯ ПОКАЗА ЗАКАЗА =====
 async def show_order(message: types.Message, state: FSMContext, order_data):
     items_text = ""
     for item in order_data.get('items', []):
@@ -154,81 +165,58 @@ async def show_order(message: types.Message, state: FSMContext, order_data):
     await OrderState.waiting_for_name.set()
 
 
-# ===== ПОЛУЧЕНИЕ ИМЕНИ =====
 @dp.message_handler(state=OrderState.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
     name = message.text.strip()
-    
     if len(name) < 2:
-        await message.answer("❌ Пожалуйста, введите корректное имя (минимум 2 символа):")
+        await message.answer("❌ Введите корректное имя (минимум 2 символа):")
         return
-    
     await state.update_data(name=name)
-    
     await message.answer(
-        f"✅ {name}, спасибо!\n\n"
-        "📞 Теперь укажите ваш *номер телефона*:\n"
-        "Например: +996 700 123 456",
+        f"✅ {name}, спасибо!\n\n📞 Теперь укажите ваш *номер телефона*:\nНапример: +996 700 123 456",
         parse_mode="Markdown"
     )
     await OrderState.waiting_for_phone.set()
 
 
-# ===== ПОЛУЧЕНИЕ ТЕЛЕФОНА =====
 @dp.message_handler(state=OrderState.waiting_for_phone)
 async def process_phone(message: types.Message, state: FSMContext):
     phone = message.text.strip()
-    
     if len(phone) < 10:
-        await message.answer("❌ Пожалуйста, введите корректный номер телефона (минимум 10 цифр):")
+        await message.answer("❌ Введите корректный номер телефона (минимум 10 цифр):")
         return
-    
     await state.update_data(phone=phone)
-    
     await message.answer(
-        f"📞 Номер: {phone}\n\n"
-        "🏠 Теперь укажите *адрес доставки*:\n"
-        "Улица, дом, квартира, подъезд, этаж",
+        f"📞 Номер: {phone}\n\n🏠 Теперь укажите *адрес доставки*:\nУлица, дом, квартира, подъезд, этаж",
         parse_mode="Markdown"
     )
     await OrderState.waiting_for_address.set()
 
 
-# ===== ПОЛУЧЕНИЕ АДРЕСА =====
 @dp.message_handler(state=OrderState.waiting_for_address)
 async def process_address(message: types.Message, state: FSMContext):
     address = message.text.strip()
-    
     if len(address) < 5:
-        await message.answer("❌ Пожалуйста, введите полный адрес:")
+        await message.answer("❌ Введите полный адрес:")
         return
-    
     await state.update_data(address=address)
-    
     await message.answer(
-        "💰 *Выберите способ оплаты:*\n\n"
-        "1️⃣ *Наличными* при получении\n"
-        "2️⃣ *Картой* при получении (терминал)\n"
-        "3️⃣ *Онлайн-оплата* (перевод на карту)\n\n"
-        "📝 *Введите номер способа оплаты (1, 2 или 3):*",
+        "💰 *Выберите способ оплаты:*\n\n1️⃣ Наличными при получении\n2️⃣ Картой при получении\n3️⃣ Онлайн-перевод\n\n📝 Введите 1, 2 или 3:",
         parse_mode="Markdown"
     )
     await OrderState.waiting_for_payment.set()
 
 
-# ===== ПОЛУЧЕНИЕ СПОСОБА ОПЛАТЫ =====
 @dp.message_handler(state=OrderState.waiting_for_payment)
 async def process_payment(message: types.Message, state: FSMContext):
     payment_choice = message.text.strip()
-    
     payment_methods = {
         "1": "💰 Наличными при получении",
-        "2": "💳 Картой при получении (терминал)",
+        "2": "💳 Картой при получении",
         "3": "🏦 Онлайн-перевод на карту"
     }
-    
     if payment_choice not in payment_methods:
-        await message.answer("❌ Пожалуйста, введите 1, 2 или 3:")
+        await message.answer("❌ Введите 1, 2 или 3:")
         return
     
     payment_method = payment_methods[payment_choice]
@@ -239,12 +227,10 @@ async def process_payment(message: types.Message, state: FSMContext):
     phone = user_data.get("phone")
     address = user_data.get("address")
     order_data = user_data.get("order_data", {})
-    order_id = user_data.get("order_id", "не указан")
     
     items_text = ""
     for item in order_data.get('items', []):
         items_text += f"🍗 {item['title']} × {item['quantity']} = {item['sum']} ₽\n"
-    
     total = order_data.get('total', 0)
     
     order_text = f"""
@@ -269,11 +255,7 @@ async def process_payment(message: types.Message, state: FSMContext):
     
     await message.answer(
         "✅ *ЗАКАЗ ПРИНЯТ!* ✅\n\n"
-        f"👤 {name}, мы получили ваш заказ.\n\n"
-        f"📋 *Ваш заказ:*\n"
-        f"{items_text}\n"
-        f"💰 *Итого:* {total} ₽\n"
-        f"💳 *Оплата:* {payment_method}\n\n"
+        f"👤 {name}, мы получили ваш заказ.\n"
         f"📞 Свяжемся с вами по номеру: {phone}\n"
         f"🏠 Доставим по адресу: {address}\n\n"
         "🍗 *Спасибо, что выбрали Balapan chicken!*\n"
@@ -284,32 +266,23 @@ async def process_payment(message: types.Message, state: FSMContext):
     await state.finish()
 
 
-# ===== КОМАНДА /CANCEL =====
 @dp.message_handler(commands=['cancel'])
 async def cmd_cancel(message: types.Message, state: FSMContext):
     await state.finish()
-    await message.answer(
-        "❌ Оформление заказа отменено.\n\n"
-        "Вы можете начать заново через сайт, нажав 'Оформить заказ'"
-    )
+    await message.answer("❌ Оформление заказа отменено.")
 
 
-# ===== КОМАНДА /HELP =====
 @dp.message_handler(commands=['help'])
 async def cmd_help(message: types.Message):
     await message.answer(
         "🐔 *Balapan chicken - Помощь* 🐔\n\n"
-        "1️⃣ Оформите заказ на нашем сайте\n"
-        "2️⃣ Перейдите в бота для подтверждения\n"
-        "3️⃣ Укажите имя, телефон и адрес\n"
-        "4️⃣ Выберите способ оплаты\n"
-        "5️⃣ Дождитесь звонка оператора\n\n"
-        "📞 По вопросам: +996 XXX XXX XXX",
+        "/start - Начать оформление\n"
+        "/cancel - Отменить\n"
+        "/help - Помощь",
         parse_mode="Markdown"
     )
 
 
-# ===== FLASK-СЕРВЕР ДЛЯ RENDER =====
 app = Flask(__name__)
 
 @app.route('/')
@@ -320,7 +293,6 @@ def run_web():
     app.run(host='0.0.0.0', port=10000)
 
 
-# ===== ЗАПУСК =====
 if __name__ == "__main__":
     print("🤖 Бот Balapan chicken запущен!")
     print(f"📨 Заказы будут приходить в чат: {ADMIN_CHAT_ID}")
