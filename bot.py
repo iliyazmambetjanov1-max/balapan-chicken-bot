@@ -8,10 +8,9 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.utils import executor
 from flask import Flask
+import os
 
 # ===== НАСТРОЙКИ =====
-# Токены теперь берутся из переменных окружения (безопасно!)
-import os
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 
@@ -30,25 +29,39 @@ dp = Dispatcher(bot, storage=storage)
 
 # ===== ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ДАННЫХ ЗАКАЗА ИЗ ССЫЛКИ =====
 def parse_order_data(text):
+    """Извлекает данные заказа из ссылки /start order_ID_JSON"""
     try:
+        if 'order_' not in text:
+            return None, None
+        
         parts = text.split('order_')
-        if len(parts) > 1:
-            order_part = parts[1]
-            first_underscore = order_part.find('_')
-            if first_underscore > 0:
-                order_id = order_part[:first_underscore]
-                json_part = order_part[first_underscore + 1:]
-                order_data = json.loads(json_part)
-                return order_id, order_data
-    except:
-        pass
-    return None, None
+        if len(parts) < 2:
+            return None, None
+        
+        order_part = parts[1]
+        
+        first_underscore = order_part.find('_')
+        if first_underscore == -1:
+            return None, None
+        
+        order_id = order_part[:first_underscore]
+        json_part = order_part[first_underscore + 1:]
+        
+        order_data = json.loads(json_part)
+        
+        return order_id, order_data
+        
+    except Exception as e:
+        print(f"Ошибка парсинга: {e}")
+        return None, None
 
 
 # ===== КОМАНДА /START =====
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message, state: FSMContext):
     text = message.text
+    print(f"Получен текст: {text[:200]}")  # Для отладки
+    
     order_id, order_data = parse_order_data(text)
     
     if order_data:
