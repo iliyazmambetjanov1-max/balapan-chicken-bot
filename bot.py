@@ -11,10 +11,17 @@ from aiogram.utils import executor
 from flask import Flask
 import os
 import re
+from supabase import create_client
 
 # ===== НАСТРОЙКИ =====
 BOT_TOKEN = "8597592634:AAE-yzoBERU6wjSZO5P03VdrB2Y9jGOYG44"
 ADMIN_CHAT_ID = "8746312387"
+
+# ===== НАСТРОЙКИ SUPABASE =====
+SUPABASE_URL = "https://zcosrrxzodymvicuunxt.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpjb3Nycnh6b2R5bXZpY3V1bnh0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgxNTIxNzksImV4cCI6MjA5MzcyODE3OX0.UnhfCXN0zsebhDBPyT7KZUoL4UK7u7R4HseW5eyMqrY"
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ===== СОСТОЯНИЯ =====
 class OrderState(StatesGroup):
@@ -28,64 +35,48 @@ bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
-pending_orders = {}
+
+# ===== ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ЗАКАЗА ИЗ SUPABASE =====
+def get_order_by_id(order_id):
+    """Получает заказ из Supabase по ID"""
+    try:
+        result = supabase.table('orders').select('order_data').eq('id', int(order_id)).execute()
+        if result.data and len(result.data) > 0:
+            return result.data[0]['order_data']
+    except Exception as e:
+        print(f"❌ Ошибка получения заказа: {e}")
+    return None
 
 
-def save_pending_order(user_id, order_id, order_data):
-    pending_orders[user_id] = {
-        'order_id': order_id,
-        'order_data': order_data,
-        'timestamp': datetime.now()
-    }
-
-
-def get_pending_order(user_id):
-    return pending_orders.get(user_id)
-
-
-def clear_pending_order(user_id):
-    if user_id in pending_orders:
-        del pending_orders[user_id]
-
-
-# ===== ФУНКЦИЯ ДЛЯ ПАРСИНГА (ПРАВИЛЬНАЯ ВЕРСИЯ) =====
+# ===== ФУНКЦИЯ ДЛЯ ПАРСИНГА =====
 def parse_start_data(text):
-    """Извлекает данные из ссылки /start order_ID_JSON"""
+    """Извлекает ID заказа из ссылки /start order_ID"""
     try:
         print(f"🔍 Парсинг: {text[:200]}")
         
         if not text or not text.startswith('/start'):
-            return None, None
+            return None
         
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
-            return None, None
+            return None
         
         param = parts[1].strip()
-        print(f"📦 Параметр: {param[:200]}")
+        print(f"📦 Параметр: {param[:100]}")
         
-        # Ищем order_ЦИФРЫ_ЛЮБЫЕ_СИМВОЛЫ
-        match = re.search(r'order_(\d+)_(.+)', param)
+        # Ищем order_ЦИФРЫ
+        match = re.search(r'order_(\d+)', param)
         if not match:
-            print("❌ Нет совпадения")
-            return None, None
+            print("❌ Нет совпадения с order_")
+            return None
         
         order_id = match.group(1)
-        encoded_json = match.group(2)
-        
-        # Декодируем URL
-        decoded_json = unquote(encoded_json)
-        print(f"📋 Декодировано: {decoded_json[:150]}")
-        
-        # Парсим JSON
-        order_data = json.loads(decoded_json)
-        print(f"✅ Успешно! ID: {order_id}")
-        
-        return order_id, order_data
+        print(f"✅ Найден ID заказа: {order_id}")
+        return int(order_id)
         
     except Exception as e:
         print(f"❌ Ошибка: {e}")
-        return None, None
+        return None
 
 
 # ===== КОМАНДА /START =====
@@ -96,17 +87,23 @@ async def cmd_start(message: types.Message, state: FSMContext):
     
     print(f"📨 /start от {user_id}: {text[:100]}")
     
-    # Пытаемся распарсить параметр
-    order_id, order_data = parse_start_data(text)
+    # Пытаемся получить ID заказа из параметра
+    order_id = parse_start_data(text)
     
-    if order_data:
-        print(f"✅ Заказ получен! ID: {order_id}")
-        await state.update_data(order_data=order_data)
-        await show_order(message, state, order_data)
-        return
+    if order_id:
+        # Получаем заказ из Supabase
+        order_data = get_order_by_id(order_id)
+        
+        if order_data:
+            print(f"✅ Заказ получен! ID: {order_id}")
+            await state.update_data(order_data=order_data)
+            await show_order(message, state, order_data)
+            return
+        else:
+            print(f"❌ Заказ с ID {order_id} не найден в Supabase")
     
     # Если заказа нет — обычное приветствие
-    print("❌ Заказ не найден")
+    print("❌ Заказ не найден, показываем приветствие")
     await message.answer(
         "🐔 *Добро пожаловать в Balapan chicken!* 🐔\n\n"
         "Вы можете оформить заказ на нашем сайте.\n"
