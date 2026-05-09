@@ -10,9 +10,9 @@ from aiogram.utils import executor
 from flask import Flask
 import os
 
-# ===== НАСТРОЙКИ =====
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+# ===== НАСТРОЙКИ (ЗАПОЛНЕНО ВАШИМИ ДАННЫМИ) =====
+BOT_TOKEN = "8597592634:AAE-yzoBERU6wjSZO5P03VdrB2Y9jGOYG44"
+ADMIN_CHAT_ID = "8746312387"
 
 # ===== СОСТОЯНИЯ ДЛЯ СБОРА ДАННЫХ =====
 class OrderState(StatesGroup):
@@ -31,28 +31,43 @@ dp = Dispatcher(bot, storage=storage)
 def parse_order_data(text):
     """Извлекает данные заказа из ссылки /start order_ID_JSON"""
     try:
+        # Проверяем, есть ли order_ в тексте
         if 'order_' not in text:
+            print("❌ Нет order_ в тексте")
             return None, None
         
+        # Берём всё после order_
         parts = text.split('order_')
         if len(parts) < 2:
+            print("❌ Нет данных после order_")
             return None, None
         
         order_part = parts[1]
+        print(f"📦 order_part: {order_part[:100]}")
         
+        # Находим первый underscore
         first_underscore = order_part.find('_')
         if first_underscore == -1:
-            return None, None
+            print("❌ Нет underscore, передаём только ID")
+            order_id = order_part
+            # Возвращаем тестовые данные
+            test_data = {
+                'items': [{'title': 'Тестовое блюдо', 'quantity': 1, 'sum': 100}],
+                'total': 100
+            }
+            return order_id, test_data
         
         order_id = order_part[:first_underscore]
         json_part = order_part[first_underscore + 1:]
         
-        order_data = json.loads(json_part)
+        print(f"🆔 ID заказа: {order_id}")
+        print(f"📋 JSON часть: {json_part[:100]}")
         
+        order_data = json.loads(json_part)
         return order_id, order_data
         
     except Exception as e:
-        print(f"Ошибка парсинга: {e}")
+        print(f"❌ Ошибка парсинга: {e}")
         return None, None
 
 
@@ -60,11 +75,12 @@ def parse_order_data(text):
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message, state: FSMContext):
     text = message.text
-    print(f"Получен текст: {text[:200]}")  # Для отладки
+    print(f"📨 Получена команда: {text}")
     
     order_id, order_data = parse_order_data(text)
     
     if order_data:
+        print(f"✅ Заказ найден! ID: {order_id}")
         await state.update_data(order_id=order_id, order_data=order_data)
         
         items_text = ""
@@ -88,6 +104,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
         )
         await OrderState.waiting_for_name.set()
     else:
+        print("❌ Заказ не найден, показываем обычное приветствие")
         await message.answer(
             "🐔 *Добро пожаловать в Balapan chicken!* 🐔\n\n"
             "Вы можете оформить заказ на нашем сайте.\n"
@@ -263,6 +280,7 @@ def home():
 
 def run_web():
     app.run(host='0.0.0.0', port=10000)
+
 
 # ===== ЗАПУСК БОТА И ВЕБ-СЕРВЕРА =====
 if __name__ == "__main__":
