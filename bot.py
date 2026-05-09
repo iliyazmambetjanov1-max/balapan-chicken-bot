@@ -1,22 +1,26 @@
 import asyncio
 import json
+import threading
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.utils import executor
+from flask import Flask
 
 # ===== НАСТРОЙКИ =====
-BOT_TOKEN = "8597592634:AAE-yzoBERU6wjSZO5P03VdrB2Y9jGOYG44"
-ADMIN_CHAT_ID = "8746312387"
+# Токены теперь берутся из переменных окружения (безопасно!)
+import os
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 
 # ===== СОСТОЯНИЯ ДЛЯ СБОРА ДАННЫХ =====
 class OrderState(StatesGroup):
     waiting_for_name = State()
     waiting_for_phone = State()
     waiting_for_address = State()
-    waiting_for_payment = State()  # Новое состояние для способа оплаты
+    waiting_for_payment = State()
 
 # ===== ИНИЦИАЛИЗАЦИЯ =====
 bot = Bot(token=BOT_TOKEN)
@@ -26,12 +30,10 @@ dp = Dispatcher(bot, storage=storage)
 
 # ===== ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ДАННЫХ ЗАКАЗА ИЗ ССЫЛКИ =====
 def parse_order_data(text):
-    """Извлекает данные заказа из ссылки /start order_ID_JSON"""
     try:
         parts = text.split('order_')
         if len(parts) > 1:
             order_part = parts[1]
-            # Формат: ID_JSON
             first_underscore = order_part.find('_')
             if first_underscore > 0:
                 order_id = order_part[:first_underscore]
@@ -50,10 +52,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
     order_id, order_data = parse_order_data(text)
     
     if order_data:
-        # Сохраняем данные заказа в сессию
         await state.update_data(order_id=order_id, order_data=order_data)
         
-        # Формируем красивый текст заказа
         items_text = ""
         for item in order_data.get('items', []):
             items_text += f"🍗 {item['title']} × {item['quantity']} = {item['sum']} ₽\n"
@@ -164,7 +164,6 @@ async def process_payment(message: types.Message, state: FSMContext):
     payment_method = payment_methods[payment_choice]
     await state.update_data(payment=payment_method)
     
-    # Получаем все данные
     user_data = await state.get_data()
     name = user_data.get("name")
     phone = user_data.get("phone")
@@ -172,14 +171,12 @@ async def process_payment(message: types.Message, state: FSMContext):
     order_data = user_data.get("order_data", {})
     order_id = user_data.get("order_id", "не указан")
     
-    # Формируем список блюд
     items_text = ""
     for item in order_data.get('items', []):
         items_text += f"🍗 {item['title']} × {item['quantity']} = {item['sum']} ₽\n"
     
     total = order_data.get('total', 0)
     
-    # Формируем полный заказ для администратора
     order_text = f"""
 🆕 *НОВЫЙ ЗАКАЗ!* 🆕
 ──────────────────
@@ -200,14 +197,8 @@ async def process_payment(message: types.Message, state: FSMContext):
 💬 Свяжитесь с клиентом для подтверждения.
     """
     
-    # Отправляем заказ администратору
-    await bot.send_message(
-        ADMIN_CHAT_ID,
-        order_text,
-        parse_mode="Markdown"
-    )
+    await bot.send_message(ADMIN_CHAT_ID, order_text, parse_mode="Markdown")
     
-    # Подтверждение клиенту
     await message.answer(
         "✅ *ЗАКАЗ ПРИНЯТ!* ✅\n\n"
         f"👤 {name}, мы получили ваш заказ.\n\n"
@@ -218,8 +209,7 @@ async def process_payment(message: types.Message, state: FSMContext):
         f"📞 Свяжемся с вами по номеру: {phone}\n"
         f"🏠 Доставим по адресу: {address}\n\n"
         "🍗 *Спасибо, что выбрали Balapan chicken!*\n"
-        "⏱️ Ожидайте звонка в ближайшее время.\n\n"
-        "✨ Хорошего дня! ✨",
+        "⏱️ Ожидайте звонка в ближайшее время.",
         parse_mode="Markdown"
     )
     
@@ -251,8 +241,24 @@ async def cmd_help(message: types.Message):
     )
 
 
-# ===== ЗАПУСК БОТА =====
+# ===== FLASK-СЕРВЕР ДЛЯ RENDER =====
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "✅ Balapan chicken bot is running!"
+
+def run_web():
+    app.run(host='0.0.0.0', port=10000)
+
+# ===== ЗАПУСК БОТА И ВЕБ-СЕРВЕРА =====
 if __name__ == "__main__":
     print("🤖 Бот Balapan chicken запущен!")
     print(f"📨 Заказы будут приходить в чат: {ADMIN_CHAT_ID}")
+    
+    # Запускаем Flask-сервер в отдельном потоке
+    web_thread = threading.Thread(target=run_web, daemon=True)
+    web_thread.start()
+    
+    # Запускаем бота
     executor.start_polling(dp, skip_updates=True)
