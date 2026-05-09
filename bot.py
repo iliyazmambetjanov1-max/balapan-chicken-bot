@@ -16,35 +16,64 @@ class OrderState(StatesGroup):
     waiting_for_name = State()
     waiting_for_phone = State()
     waiting_for_address = State()
+    waiting_for_payment = State()  # Новое состояние для способа оплаты
 
 # ===== ИНИЦИАЛИЗАЦИЯ =====
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
-# Временное хранилище заказов (в памяти)
-pending_orders = {}
+
+# ===== ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ДАННЫХ ЗАКАЗА ИЗ ССЫЛКИ =====
+def parse_order_data(text):
+    """Извлекает данные заказа из ссылки /start order_ID_JSON"""
+    try:
+        parts = text.split('order_')
+        if len(parts) > 1:
+            order_part = parts[1]
+            # Формат: ID_JSON
+            first_underscore = order_part.find('_')
+            if first_underscore > 0:
+                order_id = order_part[:first_underscore]
+                json_part = order_part[first_underscore + 1:]
+                order_data = json.loads(json_part)
+                return order_id, order_data
+    except:
+        pass
+    return None, None
 
 
 # ===== КОМАНДА /START =====
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message, state: FSMContext):
-    # Проверяем, есть ли параметр с заказом
-    args = message.text.split()
-    order_data = None
+    text = message.text
+    order_id, order_data = parse_order_data(text)
     
-    if len(args) > 1 and args[1].startswith("order_"):
-        order_id = args[1].replace("order_", "")
-        # Сохраняем ID заказа в сессию
-        await state.update_data(order_id=order_id)
+    if order_data:
+        # Сохраняем данные заказа в сессию
+        await state.update_data(order_id=order_id, order_data=order_data)
+        
+        # Формируем красивый текст заказа
+        items_text = ""
+        for item in order_data.get('items', []):
+            items_text += f"🍗 {item['title']} × {item['quantity']} = {item['sum']} ₽\n"
+        
+        total = order_data.get('total', 0)
         
         await message.answer(
-            "🐔 *Добро пожаловать в Balapan chicken!* 🐔\n\n"
-            "✅ *Мы получили ваш заказ с сайта!*\n\n"
-            "Пожалуйста, укажите ваши данные для доставки.\n\n"
-            "✏️ *Введите ваше имя:*",
+            f"🐔 *Добро пожаловать в Balapan chicken!* 🐔\n\n"
+            f"✅ *Мы получили ваш заказ с сайта!*\n\n"
+            f"📋 *Ваш заказ:*\n"
+            f"──────────────────\n"
+            f"{items_text}"
+            f"──────────────────\n"
+            f"💰 *ИТОГО:* {total} ₽\n"
+            f"──────────────────\n\n"
+            f"✏️ *Пожалуйста, укажите ваши данные для доставки:*\n\n"
+            f"📝 *Введите ваше имя:*",
             parse_mode="Markdown"
         )
+        await OrderState.waiting_for_name.set()
     else:
         await message.answer(
             "🐔 *Добро пожаловать в Balapan chicken!* 🐔\n\n"
@@ -53,9 +82,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
             "📞 По вопросам: +996 XXX XXX XXX",
             parse_mode="Markdown"
         )
-        return
-    
-    await OrderState.waiting_for_name.set()
 
 
 # ===== ПОЛУЧЕНИЕ ИМЕНИ =====
@@ -107,19 +133,67 @@ async def process_address(message: types.Message, state: FSMContext):
         await message.answer("❌ Пожалуйста, введите полный адрес:")
         return
     
+    await state.update_data(address=address)
+    
+    await message.answer(
+        "💰 *Выберите способ оплаты:*\n\n"
+        "1️⃣ *Наличными* при получении\n"
+        "2️⃣ *Картой* при получении (терминал)\n"
+        "3️⃣ *Онлайн-оплата* (перевод на карту)\n\n"
+        "📝 *Введите номер способа оплаты (1, 2 или 3):*",
+        parse_mode="Markdown"
+    )
+    await OrderState.waiting_for_payment.set()
+
+
+# ===== ПОЛУЧЕНИЕ СПОСОБА ОПЛАТЫ =====
+@dp.message_handler(state=OrderState.waiting_for_payment)
+async def process_payment(message: types.Message, state: FSMContext):
+    payment_choice = message.text.strip()
+    
+    payment_methods = {
+        "1": "💰 Наличными при получении",
+        "2": "💳 Картой при получении (терминал)",
+        "3": "🏦 Онлайн-перевод на карту"
+    }
+    
+    if payment_choice not in payment_methods:
+        await message.answer("❌ Пожалуйста, введите 1, 2 или 3:")
+        return
+    
+    payment_method = payment_methods[payment_choice]
+    await state.update_data(payment=payment_method)
+    
+    # Получаем все данные
     user_data = await state.get_data()
     name = user_data.get("name")
     phone = user_data.get("phone")
+    address = user_data.get("address")
+    order_data = user_data.get("order_data", {})
     order_id = user_data.get("order_id", "не указан")
     
-    # Формируем заказ для администратора
+    # Формируем список блюд
+    items_text = ""
+    for item in order_data.get('items', []):
+        items_text += f"🍗 {item['title']} × {item['quantity']} = {item['sum']} ₽\n"
+    
+    total = order_data.get('total', 0)
+    
+    # Формируем полный заказ для администратора
     order_text = f"""
 🆕 *НОВЫЙ ЗАКАЗ!* 🆕
 ──────────────────
 🆔 *ID заказа:* {order_id}
+──────────────────
+📋 *БЛЮДА:*
+{items_text}
+──────────────────
+💰 *ИТОГО:* {total} ₽
+──────────────────
 👤 *Имя:* {name}
 📞 *Телефон:* {phone}
 🏠 *Адрес:* {address}
+💳 *Оплата:* {payment_method}
 ──────────────────
 ⏱️ *Время:* {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}
 ──────────────────
@@ -136,7 +210,11 @@ async def process_address(message: types.Message, state: FSMContext):
     # Подтверждение клиенту
     await message.answer(
         "✅ *ЗАКАЗ ПРИНЯТ!* ✅\n\n"
-        f"👤 {name}, мы получили ваш заказ.\n"
+        f"👤 {name}, мы получили ваш заказ.\n\n"
+        f"📋 *Ваш заказ:*\n"
+        f"{items_text}\n"
+        f"💰 *Итого:* {total} ₽\n"
+        f"💳 *Оплата:* {payment_method}\n\n"
         f"📞 Свяжемся с вами по номеру: {phone}\n"
         f"🏠 Доставим по адресу: {address}\n\n"
         "🍗 *Спасибо, что выбрали Balapan chicken!*\n"
@@ -166,7 +244,8 @@ async def cmd_help(message: types.Message):
         "1️⃣ Оформите заказ на нашем сайте\n"
         "2️⃣ Перейдите в бота для подтверждения\n"
         "3️⃣ Укажите имя, телефон и адрес\n"
-        "4️⃣ Дождитесь звонка оператора\n\n"
+        "4️⃣ Выберите способ оплаты\n"
+        "5️⃣ Дождитесь звонка оператора\n\n"
         "📞 По вопросам: +996 XXX XXX XXX",
         parse_mode="Markdown"
     )
