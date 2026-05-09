@@ -45,17 +45,12 @@ def parse_order_data(text):
         order_part = parts[1]
         print(f"📦 order_part: {order_part[:100]}")
         
-        # Находим первый underscore
+        # Находим первый underscore (разделитель между ID и JSON)
         first_underscore = order_part.find('_')
         if first_underscore == -1:
-            print("❌ Нет underscore, передаём только ID")
-            order_id = order_part
-            # Возвращаем тестовые данные
-            test_data = {
-                'items': [{'title': 'Тестовое блюдо', 'quantity': 1, 'sum': 100}],
-                'total': 100
-            }
-            return order_id, test_data
+            # НЕТ JSON, значит заказ не передан — возвращаем None (НЕ показываем тестовое блюдо)
+            print("❌ Нет JSON данных в ссылке")
+            return None, None
         
         order_id = order_part[:first_underscore]
         json_part = order_part[first_underscore + 1:]
