@@ -1,0 +1,21 @@
+# Зависимости (не нужно загружать, они установятся на сервере)
+node_modules/
+
+# Файлы окружения с секретами
+.env
+.env.local
+
+# Логи
+*.log
+npm-debug.log*
+
+# Файлы VS Code
+.vscode/
+*.code-workspace
+
+# Файлы Windows
+Thumbs.db
+Desktop.ini
+
+# Файлы macOS
+.DS_Store
