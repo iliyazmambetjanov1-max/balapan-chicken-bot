@@ -8,6 +8,7 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.utils import executor
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask
 import os
 import re
@@ -15,7 +16,7 @@ from supabase import create_client
 
 # ===== НАСТРОЙКИ =====
 BOT_TOKEN = "8597592634:AAE-yzoBERU6wjSZO5P03VdrB2Y9jGOYG44"
-ADMIN_CHAT_ID = "8746312387"
+ADMIN_CHAT_ID = "8746312387"  # ID администратора
 
 # ===== НАСТРОЙКИ SUPABASE =====
 SUPABASE_URL = "https://zcosrrxzodymvicuunxt.supabase.co"
@@ -28,12 +29,38 @@ class OrderState(StatesGroup):
     waiting_for_name = State()
     waiting_for_phone = State()
     waiting_for_address = State()
-    waiting_for_payment = State()
+    waiting_for_payment_method = State()  # Выбор способа оплаты
+    waiting_for_bank = State()  # Выбор банка (только для перевода)
 
-# ===== ИНИЦИАЛИЗАЦИЯ =====
-bot = Bot(token=BOT_TOKEN)
-storage = MemoryStorage()
-dp = Dispatcher(bot, storage=storage)
+
+# ===== КЛАВИАТУРЫ =====
+def get_payment_keyboard():
+    """Клавиатура выбора способа оплаты"""
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(
+        InlineKeyboardButton("💰 Наличными при получении", callback_data="payment_cash"),
+        InlineKeyboardButton("🏦 Переводом (на карту/счёт)", callback_data="payment_transfer")
+    )
+    return keyboard
+
+
+def get_bank_keyboard():
+    """Клавиатура выбора банка для перевода"""
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    banks = [
+        "О! Банк", "Бай-Тушум", "Компаньон", 
+        "Demir Bank", "РСК Банк", "KICB", "Другой банк"
+    ]
+    buttons = [InlineKeyboardButton(bank, callback_data=f"bank_{bank}") for bank in banks]
+    keyboard.add(*buttons)
+    return keyboard
+
+
+def get_paid_keyboard():
+    """Клавиатура с кнопкой 'Я оплатил'"""
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(InlineKeyboardButton("✅ Я оплатил", callback_data="paid"))
+    return keyboard
 
 
 # ===== ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ЗАКАЗА ИЗ SUPABASE =====
@@ -114,6 +141,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
 
 async def show_order(message: types.Message, state: FSMContext, order_data):
+    """Показывает заказ и запрашивает имя"""
     items_text = ""
     for item in order_data.get('items', []):
         items_text += f"🍗 {item['title']} × {item['quantity']} = {item['sum']} ₽\n"
@@ -173,28 +201,40 @@ async def process_address(message: types.Message, state: FSMContext):
         await message.answer("❌ Введите полный адрес:")
         return
     await state.update_data(address=address)
+    
+    # Предлагаем выбрать способ оплаты
     await message.answer(
-        "💰 *Выберите способ оплаты:*\n\n1️⃣ Наличными\n2️⃣ Картой\n3️⃣ Онлайн-перевод\n\nВведите 1, 2 или 3:",
-        parse_mode="Markdown"
+        "💰 *Выберите способ оплаты:*",
+        parse_mode="Markdown",
+        reply_markup=get_payment_keyboard()
     )
-    await OrderState.waiting_for_payment.set()
+    await OrderState.waiting_for_payment_method.set()
 
 
-@dp.message_handler(state=OrderState.waiting_for_payment)
-async def process_payment(message: types.Message, state: FSMContext):
-    payment_choice = message.text.strip()
-    payment_methods = {
-        "1": "💰 Наличными при получении",
-        "2": "💳 Картой при получении",
-        "3": "🏦 Онлайн-перевод на карту"
-    }
-    if payment_choice not in payment_methods:
-        await message.answer("❌ Введите 1, 2 или 3:")
-        return
+# ===== ВЫБОР СПОСОБА ОПЛАТЫ =====
+@dp.callback_query_handler(lambda c: c.data in ["payment_cash", "payment_transfer"], state=OrderState.waiting_for_payment_method)
+async def process_payment_method(callback_query: types.CallbackQuery, state: FSMContext):
+    await bot.answer_callback_query(callback_query.id)
     
-    payment_method = payment_methods[payment_choice]
-    await state.update_data(payment=payment_method)
+    if callback_query.data == "payment_cash":
+        # Наличными → сразу отправляем заказ админу
+        await process_cash_payment(callback_query.message, state)
+    else:
+        # Перевод → запрашиваем выбор банка
+        await state.update_data(payment_method="перевод")
+        await bot.send_message(
+            callback_query.from_user.id,
+            "🏦 *Выберите ваш банк для перевода:*",
+            parse_mode="Markdown",
+            reply_markup=get_bank_keyboard()
+        )
+        await OrderState.waiting_for_bank.set()
     
+    await callback_query.message.delete()  # Удаляем клавиатуру
+
+
+async def process_cash_payment(message: types.Message, state: FSMContext):
+    """Обработка оплаты наличными - сразу отправляем заказ админу"""
     user_data = await state.get_data()
     name = user_data.get("name")
     phone = user_data.get("phone")
@@ -217,7 +257,7 @@ async def process_payment(message: types.Message, state: FSMContext):
 👤 *Имя:* {name}
 📞 *Телефон:* {phone}
 🏠 *Адрес:* {address}
-💳 *Оплата:* {payment_method}
+💳 *Оплата:* Наличными при получении
 ──────────────────
 ⏱️ *Время:* {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}
     """
@@ -236,6 +276,102 @@ async def process_payment(message: types.Message, state: FSMContext):
     await state.finish()
 
 
+# ===== ВЫБОР БАНКА =====
+@dp.callback_query_handler(lambda c: c.data.startswith("bank_"), state=OrderState.waiting_for_bank)
+async def process_bank_selection(callback_query: types.CallbackQuery, state: FSMContext):
+    await bot.answer_callback_query(callback_query.id)
+    
+    bank_name = callback_query.data.replace("bank_", "")
+    await state.update_data(bank=bank_name)
+    
+    # Сохраняем сумму заказа для отображения
+    user_data = await state.get_data()
+    order_data = user_data.get("order_data", {})
+    total = order_data.get('total', 0)
+    
+    # Отправляем реквизиты для оплаты
+    payment_text = f"""
+🏦 *Оплата через {bank_name}*
+
+💰 Сумма к оплате: *{total} ₽*
+
+📝 *Реквизиты для перевода:*
+Номер карты: 4405 43XX XXXX XXXX
+Получатель: Balapan chicken
+
+⚠️ *Важно:* После оплаты нажмите кнопку «✅ Я оплатил» внизу.
+
+❗ Переводы принимаются только с карт банков Кыргызстана.
+    """
+    
+    await bot.send_message(
+        callback_query.from_user.id,
+        payment_text,
+        parse_mode="Markdown",
+        reply_markup=get_paid_keyboard()
+    )
+    
+    await callback_query.message.delete()  # Удаляем клавиатуру с банками
+    await OrderState.waiting_for_bank.set()  # Остаемся в этом состоянии до нажатия "Я оплатил"
+
+
+# ===== КНОПКА "Я ОПЛАТИЛ" =====
+@dp.callback_query_handler(lambda c: c.data == "paid", state=OrderState.waiting_for_bank)
+async def process_paid(callback_query: types.CallbackQuery, state: FSMContext):
+    await bot.answer_callback_query(callback_query.id)
+    
+    # Отправляем сообщение о проверке
+    await bot.send_message(
+        callback_query.from_user.id,
+        "⏳ *Мы проверяем оплату...*\n\nПожалуйста, ожидайте. Обычно это занимает несколько минут.",
+        parse_mode="Markdown"
+    )
+    
+    # Получаем данные заказа
+    user_data = await state.get_data()
+    name = user_data.get("name")
+    phone = user_data.get("phone")
+    address = user_data.get("address")
+    bank = user_data.get("bank", "не указан")
+    order_data = user_data.get("order_data", {})
+    
+    items_text = ""
+    for item in order_data.get('items', []):
+        items_text += f"🍗 {item['title']} × {item['quantity']} = {item['sum']} ₽\n"
+    total = order_data.get('total', 0)
+    
+    # Отправляем заказ админу с пометкой об оплате
+    order_text = f"""
+🆕 *НОВЫЙ ЗАКАЗ!* 🆕
+💸 *ОПЛАЧЕН (ожидает проверки)* 💸
+──────────────────
+📋 *БЛЮДА:*
+{items_text}
+──────────────────
+💰 *ИТОГО:* {total} ₽
+──────────────────
+👤 *Имя:* {name}
+📞 *Телефон:* {phone}
+🏠 *Адрес:* {address}
+🏦 *Банк:* {bank}
+──────────────────
+⏱️ *Время:* {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}
+    """
+    
+    await bot.send_message(ADMIN_CHAT_ID, order_text, parse_mode="Markdown")
+    
+    # Подтверждение клиенту
+    await bot.send_message(
+        callback_query.from_user.id,
+        "✅ *Спасибо! Мы проверим оплату и свяжемся с вами.*\n\n"
+        "Если у вас есть вопросы, напишите нам.",
+        parse_mode="Markdown"
+    )
+    
+    await state.finish()
+
+
+# ===== ДРУГИЕ КОМАНДЫ =====
 @dp.message_handler(commands=['cancel'])
 async def cmd_cancel(message: types.Message, state: FSMContext):
     await state.finish()
