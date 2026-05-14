@@ -24,18 +24,22 @@ SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# ===== ИНИЦИАЛИЗАЦИЯ БОТА =====
+bot = Bot(token=BOT_TOKEN)
+storage = MemoryStorage()
+dp = Dispatcher(bot, storage=storage)  # ← ЭТА СТРОКА БЫЛА ПРОПУЩЕНА!
+
 # ===== СОСТОЯНИЯ =====
 class OrderState(StatesGroup):
     waiting_for_name = State()
     waiting_for_phone = State()
     waiting_for_address = State()
-    waiting_for_payment_method = State()  # Выбор способа оплаты
-    waiting_for_bank = State()  # Выбор банка (только для перевода)
+    waiting_for_payment_method = State()
+    waiting_for_bank = State()
 
 
 # ===== КЛАВИАТУРЫ =====
 def get_payment_keyboard():
-    """Клавиатура выбора способа оплаты"""
     keyboard = InlineKeyboardMarkup(row_width=1)
     keyboard.add(
         InlineKeyboardButton("💰 Наличными при получении", callback_data="payment_cash"),
@@ -45,7 +49,6 @@ def get_payment_keyboard():
 
 
 def get_bank_keyboard():
-    """Клавиатура выбора банка для перевода"""
     keyboard = InlineKeyboardMarkup(row_width=2)
     banks = [
         "О! Банк", "Бай-Тушум", "Компаньон", 
@@ -57,7 +60,6 @@ def get_bank_keyboard():
 
 
 def get_paid_keyboard():
-    """Клавиатура с кнопкой 'Я оплатил'"""
     keyboard = InlineKeyboardMarkup(row_width=1)
     keyboard.add(InlineKeyboardButton("✅ Я оплатил", callback_data="paid"))
     return keyboard
@@ -65,7 +67,6 @@ def get_paid_keyboard():
 
 # ===== ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ЗАКАЗА ИЗ SUPABASE =====
 def get_order_by_id(order_id):
-    """Получает заказ из Supabase по ID"""
     try:
         result = supabase.table('orders').select('order_data').eq('id', int(order_id)).execute()
         if result.data and len(result.data) > 0:
@@ -77,7 +78,6 @@ def get_order_by_id(order_id):
 
 # ===== ФУНКЦИЯ ДЛЯ ПАРСИНГА =====
 def parse_start_data(text):
-    """Извлекает ID заказа из ссылки /start order_ID"""
     try:
         print(f"🔍 Парсинг: {text[:200]}")
         
@@ -91,7 +91,6 @@ def parse_start_data(text):
         param = parts[1].strip()
         print(f"📦 Параметр: {param[:100]}")
         
-        # Ищем order_ЦИФРЫ
         match = re.search(r'order_(\d+)', param)
         if not match:
             print("❌ Нет совпадения с order_")
@@ -114,11 +113,9 @@ async def cmd_start(message: types.Message, state: FSMContext):
     
     print(f"📨 /start от {user_id}: {text[:100]}")
     
-    # Пытаемся получить ID заказа из параметра
     order_id = parse_start_data(text)
     
     if order_id:
-        # Получаем заказ из Supabase
         order_data = get_order_by_id(order_id)
         
         if order_data:
@@ -126,11 +123,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
             await state.update_data(order_data=order_data)
             await show_order(message, state, order_data)
             return
-        else:
-            print(f"❌ Заказ с ID {order_id} не найден в Supabase")
     
-    # Если заказа нет — обычное приветствие
-    print("❌ Заказ не найден, показываем приветствие")
     await message.answer(
         "🐔 *Добро пожаловать в Balapan chicken!* 🐔\n\n"
         "Вы можете оформить заказ на нашем сайте.\n"
@@ -141,7 +134,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
 
 async def show_order(message: types.Message, state: FSMContext, order_data):
-    """Показывает заказ и запрашивает имя"""
     items_text = ""
     for item in order_data.get('items', []):
         items_text += f"🍗 {item['title']} × {item['quantity']} = {item['sum']} ₽\n"
@@ -202,7 +194,6 @@ async def process_address(message: types.Message, state: FSMContext):
         return
     await state.update_data(address=address)
     
-    # Предлагаем выбрать способ оплаты
     await message.answer(
         "💰 *Выберите способ оплаты:*",
         parse_mode="Markdown",
@@ -211,16 +202,13 @@ async def process_address(message: types.Message, state: FSMContext):
     await OrderState.waiting_for_payment_method.set()
 
 
-# ===== ВЫБОР СПОСОБА ОПЛАТЫ =====
 @dp.callback_query_handler(lambda c: c.data in ["payment_cash", "payment_transfer"], state=OrderState.waiting_for_payment_method)
 async def process_payment_method(callback_query: types.CallbackQuery, state: FSMContext):
     await bot.answer_callback_query(callback_query.id)
     
     if callback_query.data == "payment_cash":
-        # Наличными → сразу отправляем заказ админу
         await process_cash_payment(callback_query.message, state)
     else:
-        # Перевод → запрашиваем выбор банка
         await state.update_data(payment_method="перевод")
         await bot.send_message(
             callback_query.from_user.id,
@@ -230,11 +218,10 @@ async def process_payment_method(callback_query: types.CallbackQuery, state: FSM
         )
         await OrderState.waiting_for_bank.set()
     
-    await callback_query.message.delete()  # Удаляем клавиатуру
+    await callback_query.message.delete()
 
 
 async def process_cash_payment(message: types.Message, state: FSMContext):
-    """Обработка оплаты наличными - сразу отправляем заказ админу"""
     user_data = await state.get_data()
     name = user_data.get("name")
     phone = user_data.get("phone")
@@ -276,7 +263,6 @@ async def process_cash_payment(message: types.Message, state: FSMContext):
     await state.finish()
 
 
-# ===== ВЫБОР БАНКА =====
 @dp.callback_query_handler(lambda c: c.data.startswith("bank_"), state=OrderState.waiting_for_bank)
 async def process_bank_selection(callback_query: types.CallbackQuery, state: FSMContext):
     await bot.answer_callback_query(callback_query.id)
@@ -284,12 +270,10 @@ async def process_bank_selection(callback_query: types.CallbackQuery, state: FSM
     bank_name = callback_query.data.replace("bank_", "")
     await state.update_data(bank=bank_name)
     
-    # Сохраняем сумму заказа для отображения
     user_data = await state.get_data()
     order_data = user_data.get("order_data", {})
     total = order_data.get('total', 0)
     
-    # Отправляем реквизиты для оплаты
     payment_text = f"""
 🏦 *Оплата через {bank_name}*
 
@@ -311,23 +295,20 @@ async def process_bank_selection(callback_query: types.CallbackQuery, state: FSM
         reply_markup=get_paid_keyboard()
     )
     
-    await callback_query.message.delete()  # Удаляем клавиатуру с банками
-    await OrderState.waiting_for_bank.set()  # Остаемся в этом состоянии до нажатия "Я оплатил"
+    await callback_query.message.delete()
+    await OrderState.waiting_for_bank.set()
 
 
-# ===== КНОПКА "Я ОПЛАТИЛ" =====
 @dp.callback_query_handler(lambda c: c.data == "paid", state=OrderState.waiting_for_bank)
 async def process_paid(callback_query: types.CallbackQuery, state: FSMContext):
     await bot.answer_callback_query(callback_query.id)
     
-    # Отправляем сообщение о проверке
     await bot.send_message(
         callback_query.from_user.id,
         "⏳ *Мы проверяем оплату...*\n\nПожалуйста, ожидайте. Обычно это занимает несколько минут.",
         parse_mode="Markdown"
     )
     
-    # Получаем данные заказа
     user_data = await state.get_data()
     name = user_data.get("name")
     phone = user_data.get("phone")
@@ -340,7 +321,6 @@ async def process_paid(callback_query: types.CallbackQuery, state: FSMContext):
         items_text += f"🍗 {item['title']} × {item['quantity']} = {item['sum']} ₽\n"
     total = order_data.get('total', 0)
     
-    # Отправляем заказ админу с пометкой об оплате
     order_text = f"""
 🆕 *НОВЫЙ ЗАКАЗ!* 🆕
 💸 *ОПЛАЧЕН (ожидает проверки)* 💸
@@ -360,7 +340,6 @@ async def process_paid(callback_query: types.CallbackQuery, state: FSMContext):
     
     await bot.send_message(ADMIN_CHAT_ID, order_text, parse_mode="Markdown")
     
-    # Подтверждение клиенту
     await bot.send_message(
         callback_query.from_user.id,
         "✅ *Спасибо! Мы проверим оплату и свяжемся с вами.*\n\n"
@@ -371,7 +350,6 @@ async def process_paid(callback_query: types.CallbackQuery, state: FSMContext):
     await state.finish()
 
 
-# ===== ДРУГИЕ КОМАНДЫ =====
 @dp.message_handler(commands=['cancel'])
 async def cmd_cancel(message: types.Message, state: FSMContext):
     await state.finish()
