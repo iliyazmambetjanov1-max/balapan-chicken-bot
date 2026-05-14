@@ -16,7 +16,11 @@ from supabase import create_client
 
 # ===== НАСТРОЙКИ =====
 BOT_TOKEN = "8597592634:AAE-yzoBERU6wjSZO5P03VdrB2Y9jGOYG44"
-ADMIN_CHAT_ID = "8746312387"  # ID администратора
+ADMIN_CHAT_ID = "8746312387"
+
+# ===== ФИКСИРОВАННЫЕ РЕКВИЗИТЫ ДЛЯ ОПЛАТЫ =====
+MY_PHONE_NUMBER = "+996 700 123 456"  # ЗАМЕНИТЕ НА ВАШ РЕАЛЬНЫЙ НОМЕР ТЕЛЕФОНА
+RECEIVER_NAME = "Balapan Chicken"
 
 # ===== НАСТРОЙКИ SUPABASE =====
 SUPABASE_URL = "https://zcosrrxzodymvicuunxt.supabase.co"
@@ -27,7 +31,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ===== ИНИЦИАЛИЗАЦИЯ БОТА =====
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
-dp = Dispatcher(bot, storage=storage)  # ← ЭТА СТРОКА БЫЛА ПРОПУЩЕНА!
+dp = Dispatcher(bot, storage=storage)
 
 # ===== СОСТОЯНИЯ =====
 class OrderState(StatesGroup):
@@ -51,8 +55,8 @@ def get_payment_keyboard():
 def get_bank_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     banks = [
-        "О! Банк", "Бай-Тушум", "Компаньон", 
-        "Demir Bank", "РСК Банк", "KICB", "Другой банк"
+        "MBank", "О! Банк", "Бай-Тушум", 
+        "Компаньон", "Demir Bank", "РСК Банк", "KICB", "Другой банк"
     ]
     buttons = [InlineKeyboardButton(bank, callback_data=f"bank_{bank}") for bank in banks]
     keyboard.add(*buttons)
@@ -63,6 +67,18 @@ def get_paid_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=1)
     keyboard.add(InlineKeyboardButton("✅ Я оплатил", callback_data="paid"))
     return keyboard
+
+
+# ===== ССЫЛКИ НА ПРИЛОЖЕНИЯ БАНКОВ =====
+BANK_APP_LINKS = {
+    "MBank": "https://play.google.com/store/apps/details?id=kg.mbank",
+    "О! Банк": "https://play.google.com/store/apps/details?id=com.obank",
+    "Бай-Тушум": "https://play.google.com/store/apps/details?id=kg.bay_tushum",
+    "Компаньон": "https://play.google.com/store/apps/details?id=kg.companion",
+    "Demir Bank": "https://play.google.com/store/apps/details?id=kg.demirbank",
+    "РСК Банк": "https://play.google.com/store/apps/details?id=kg.rskbank",
+    "KICB": "https://play.google.com/store/apps/details?id=kg.kicb",
+}
 
 
 # ===== ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ЗАКАЗА ИЗ SUPABASE =====
@@ -140,7 +156,11 @@ async def show_order(message: types.Message, state: FSMContext, order_data):
     
     total = order_data.get('total', 0)
     
-    await state.update_data(order_data=order_data)
+    # ФИКСИРУЕМ сумму НАВСЕГДА
+    await state.update_data(
+        order_data=order_data,
+        frozen_total=total  # Замороженная сумма
+    )
     
     await message.answer(
         f"🐔 *Добро пожаловать в Balapan chicken!* 🐔\n\n"
@@ -263,6 +283,7 @@ async def process_cash_payment(message: types.Message, state: FSMContext):
     await state.finish()
 
 
+# ===== ВЫБОР БАНКА (ОСНОВНАЯ ЛОГИКА) =====
 @dp.callback_query_handler(lambda c: c.data.startswith("bank_"), state=OrderState.waiting_for_bank)
 async def process_bank_selection(callback_query: types.CallbackQuery, state: FSMContext):
     await bot.answer_callback_query(callback_query.id)
@@ -270,29 +291,49 @@ async def process_bank_selection(callback_query: types.CallbackQuery, state: FSM
     bank_name = callback_query.data.replace("bank_", "")
     await state.update_data(bank=bank_name)
     
+    # Получаем фиксированную сумму (НЕ МЕНЯЕТСЯ)
     user_data = await state.get_data()
-    order_data = user_data.get("order_data", {})
-    total = order_data.get('total', 0)
+    total = user_data.get("frozen_total", 0)  # Используем замороженную сумму
     
+    # Текст с ФИКСИРОВАННЫМ номером телефона (а не карты)
     payment_text = f"""
 🏦 *Оплата через {bank_name}*
 
 💰 Сумма к оплате: *{total} ₽*
 
 📝 *Реквизиты для перевода:*
-Номер карты: 4405 43XX XXXX XXXX
-Получатель: Balapan chicken
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+📱 Номер телефона: `{MY_PHONE_NUMBER}`
+👤 Получатель: {RECEIVER_NAME}
+━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-⚠️ *Важно:* После оплаты нажмите кнопку «✅ Я оплатил» внизу.
+⚠️ *Как оплатить:*
+1️⃣ Откройте приложение {bank_name}
+2️⃣ Выберите «Перевод по номеру телефона»
+3️⃣ Введите номер `{MY_PHONE_NUMBER}`
+4️⃣ Укажите сумму *{total} ₽*
+5️⃣ Подтвердите перевод
+
+✅ После оплаты нажмите кнопку внизу
 
 ❗ Переводы принимаются только с карт банков Кыргызстана.
     """
+    
+    # Создаём клавиатуру
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    
+    # Кнопка открытия приложения банка
+    if bank_name in BANK_APP_LINKS:
+        keyboard.add(InlineKeyboardButton(f"📱 Открыть {bank_name}", url=BANK_APP_LINKS[bank_name]))
+    
+    # Кнопка "Я оплатил"
+    keyboard.add(InlineKeyboardButton("✅ Я оплатил", callback_data="paid"))
     
     await bot.send_message(
         callback_query.from_user.id,
         payment_text,
         parse_mode="Markdown",
-        reply_markup=get_paid_keyboard()
+        reply_markup=keyboard
     )
     
     await callback_query.message.delete()
@@ -315,11 +356,11 @@ async def process_paid(callback_query: types.CallbackQuery, state: FSMContext):
     address = user_data.get("address")
     bank = user_data.get("bank", "не указан")
     order_data = user_data.get("order_data", {})
+    total = user_data.get("frozen_total", 0)
     
     items_text = ""
     for item in order_data.get('items', []):
         items_text += f"🍗 {item['title']} × {item['quantity']} = {item['sum']} ₽\n"
-    total = order_data.get('total', 0)
     
     order_text = f"""
 🆕 *НОВЫЙ ЗАКАЗ!* 🆕
@@ -334,6 +375,7 @@ async def process_paid(callback_query: types.CallbackQuery, state: FSMContext):
 📞 *Телефон:* {phone}
 🏠 *Адрес:* {address}
 🏦 *Банк:* {bank}
+📱 *Перевод на номер:* {MY_PHONE_NUMBER}
 ──────────────────
 ⏱️ *Время:* {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}
     """
